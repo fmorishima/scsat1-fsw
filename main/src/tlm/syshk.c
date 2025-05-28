@@ -14,6 +14,7 @@
 #include "cv.h"
 #include "mgnm_mon.h"
 #include "sunsens_mon.h"
+#include "fram.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(syshk, CONFIG_SCSAT1_MAIN_LOG_LEVEL);
@@ -231,6 +232,22 @@ void send_syshk_to_ground(void)
 	csp_conn_t *conn;
 	csp_packet_t *packet;
 
+	uint32_t saved_seq_num;
+	if(sc_fram_get_tlm_seq_num(&saved_seq_num) >= 0){
+		if (syshk.seq_num == 0) { // the first time sending syshk after boot
+			syshk.seq_num = saved_seq_num;
+		}
+		else if (syshk.seq_num != saved_seq_num) {
+			LOG_ERR("Curr seq number differs from the saved value %d != %d",
+			        syshk.seq_num, saved_seq_num);
+		}
+	}
+	else {
+		LOG_ERR("Failed to get saved seq num from FRAM, curr: %d", syshk.seq_num);
+	}
+
+	syshk.seq_num++; // increment seq num for the next syshk
+
 	conn = csp_connect(CSP_PRIO_NORM, CSP_ID_GND, CSP_PORT_TLM,
 			   CONFIG_SCSAT1_MAIN_CSP_CONN_TIMEOUT_MSEC, CSP_O_NONE);
 	if (conn == NULL) {
@@ -248,13 +265,15 @@ void send_syshk_to_ground(void)
 	packet->length = sizeof(syshk);
 
 	csp_send(conn, packet);
-	LOG_DBG("Send HK to GND %d byte", packet->length);
-	syshk.seq_num++;
+	LOG_DBG("Send HK to GND %d byte, seq: %d", packet->length, syshk.seq_num);
 
 close:
 	csp_close(conn);
 
 end:
+	if(sc_fram_update_tlm_seq_num() < 0){
+		LOG_ERR("Failed to update saved seq num, curr num : %d", syshk.seq_num);
+	}
 }
 
 static void send_syshk(struct k_work *work)
