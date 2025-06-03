@@ -11,6 +11,7 @@
 #define TLM_START_ADDR 0x00000000
 #define ERASE_SECTOR_SIZE 4096
 #define MAX_TLM_STORE_NUM (TLM_FLASH_SIZE/TLM_BLOCK_SIZE)
+#define AVAILABLE_HISTORY_COUNT (MAX_TLM_STORE_NUM - (ERASE_SECTOR_SIZE / TLM_BLOCK_SIZE))
 
 int datafs_init(void);
 int update_boot_count(const char *fname);
