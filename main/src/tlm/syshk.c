@@ -232,22 +232,6 @@ void send_syshk_to_ground(void)
 	csp_conn_t *conn;
 	csp_packet_t *packet;
 
-	uint32_t saved_seq_num;
-	if(sc_fram_get_tlm_seq_num(&saved_seq_num) >= 0){
-		if (syshk.seq_num == 0) { // the first time sending syshk after boot
-			syshk.seq_num = saved_seq_num;
-		}
-		else if (syshk.seq_num != saved_seq_num) {
-			LOG_ERR("Curr seq number differs from the saved value %d != %d",
-			        syshk.seq_num, saved_seq_num);
-		}
-	}
-	else {
-		LOG_ERR("Failed to get saved seq num from FRAM, curr: %d", syshk.seq_num);
-	}
-
-	syshk.seq_num++; // increment seq num for the next syshk
-
 	conn = csp_connect(CSP_PRIO_NORM, CSP_ID_GND, CSP_PORT_TLM,
 			   CONFIG_SCSAT1_MAIN_CSP_CONN_TIMEOUT_MSEC, CSP_O_NONE);
 	if (conn == NULL) {
@@ -271,21 +255,38 @@ close:
 	csp_close(conn);
 
 end:
+}
+
+static void handle_syshk(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	uint32_t saved_seq_num;
+	if(sc_fram_get_tlm_seq_num(&saved_seq_num) >= 0){
+		if (syshk.seq_num == 0) { // the first time sending syshk after boot
+			syshk.seq_num = saved_seq_num;
+		}
+		else if (syshk.seq_num != saved_seq_num) {
+			LOG_ERR("Curr seq number differs from the saved value %d != %d",
+			        syshk.seq_num, saved_seq_num);
+		}
+	}
+	else {
+		LOG_ERR("Failed to get saved seq num from FRAM, curr: %d", syshk.seq_num);
+	}
+
+	syshk.seq_num++;
+
+	if (IS_ENABLED(CONFIG_SCSAT1_MAIN_AUTO_SYSHK_DOWNLINK)) {
+		send_syshk_to_ground();
+	}
+
 	if(sc_fram_update_tlm_seq_num() < 0){
 		LOG_ERR("Failed to update saved seq num, curr num : %d", syshk.seq_num);
 	}
 }
 
-static void send_syshk(struct k_work *work)
-{
-	ARG_UNUSED(work);
-
-	if (IS_ENABLED(CONFIG_SCSAT1_MAIN_AUTO_SYSHK_DOWNLINK)) {
-		send_syshk_to_ground();
-	}
-}
-
-static K_WORK_DEFINE(syshk_work, send_syshk);
+static K_WORK_DEFINE(syshk_work, handle_syshk);
 
 static void syshk_handler(struct k_timer *dummy)
 {
