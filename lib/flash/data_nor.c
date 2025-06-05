@@ -174,3 +174,8 @@ bool is_flash_erased(const struct device *flash_dev, uint32_t addr, size_t len)
 
 	return true;
 }
+
+const struct device* stored_tlm_flash_dev()
+{
+	return DEVICE_DT_GET(DT_NODELABEL(s25fl256l1));
+}

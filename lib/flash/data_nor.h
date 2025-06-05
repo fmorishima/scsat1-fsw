@@ -17,3 +17,4 @@ int datafs_init(void);
 int update_boot_count(const char *fname);
 int data_nor_erase(uint8_t id);
 bool is_flash_erased(const struct device *flash_dev, uint32_t addr, size_t len);
+const struct device* stored_tlm_flash_dev();
