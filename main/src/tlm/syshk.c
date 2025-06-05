@@ -232,7 +232,7 @@ static void syshk_sub_task(void *sub)
 K_THREAD_DEFINE(syshk_sub_task_id, CONFIG_SCSAT1_MAIN_SUB_SYSHK_THREAD_STACK_SIZE, syshk_sub_task,
 		&syshk_sub, NULL, NULL, CONFIG_SCSAT1_MAIN_SUB_SYSHK_THREAD_PRIORITY, 0, 0);
 
-void send_syshk_to_ground(void)
+static void send_syshk_to_ground_impl(struct syshk_tlm *syshk_tlm)
 {
 	csp_conn_t *conn;
 	csp_packet_t *packet;
@@ -244,22 +244,82 @@ void send_syshk_to_ground(void)
 		goto end;
 	}
 
-	packet = csp_buffer_get(0);
+	packet = csp_buffer_get(CSP_BUFFER_SIZE);
 	if (packet == NULL) {
 		LOG_ERR("Failed to get CSP buffer");
 		goto close;
 	}
 
-	memcpy(&packet->data, &syshk, sizeof(syshk));
-	packet->length = sizeof(syshk);
+	memcpy(&packet->data, syshk_tlm, sizeof(struct syshk_tlm));
+	packet->length = sizeof(struct syshk_tlm);
 
 	csp_send(conn, packet);
-	LOG_DBG("Send HK to GND %d byte, seq: %d", packet->length, syshk.seq_num);
+	LOG_DBG("Send HK to GND %d byte, seq: %d", packet->length, syshk_tlm->seq_num);
 
+	csp_buffer_free(packet);
 close:
 	csp_close(conn);
 
 end:
+}
+
+void send_syshk_to_ground(void)
+{
+	send_syshk_to_ground_impl(&syshk);
+}
+
+# define MIN_HISTORY_INTERVAL_MS 10 // approx minimum transmission time
+void send_syshk_history_to_ground(uint32_t req_seq_num, uint16_t req_count, uint16_t send_intvl_ms)
+{
+	const uint32_t curr_seq_num = syshk.seq_num;
+	if (send_intvl_ms < MIN_HISTORY_INTERVAL_MS) {
+		LOG_ERR("requested interval is less than minimum, interval: %u",
+				send_intvl_ms);
+		return;
+	}
+
+	if (req_seq_num >= curr_seq_num){ // at least one behind from the latest
+		LOG_ERR("requested sequence must be less than current, req num: %u, curr num: %u",
+				req_seq_num, curr_seq_num);
+		return;
+	}
+
+	uint32_t history_offset = curr_seq_num - req_seq_num;
+	uint32_t stored_count = curr_seq_num < AVAILABLE_HISTORY_COUNT?
+					curr_seq_num : AVAILABLE_HISTORY_COUNT;
+	if (history_offset > stored_count){
+		LOG_ERR("request seq num is out of stored range, curr seq num: %u, req seq num: %u, capacity: %u",
+				curr_seq_num, req_seq_num, AVAILABLE_HISTORY_COUNT);
+		return;
+	}
+	uint32_t stored_left = stored_count - history_offset;
+	if (stored_left < req_count){
+		LOG_ERR("reqested count is bigger than stored, curr seq num: %u, req seq num: %u, req count: %u, stored: %u",
+				curr_seq_num, req_seq_num, req_count, stored_count);
+		return;
+	}
+
+	struct syshk_tlm syshk_tlm;
+	const struct device *flash_dev = stored_tlm_flash_dev();
+	uint32_t start_seq_num = req_seq_num - req_count + 1;
+	uint32_t read_pos = start_seq_num % MAX_TLM_STORE_NUM;
+
+	LOG_INF("Start sending history tlm, start: %u, count: %u", start_seq_num, req_count);
+
+	for (int i = 0; i < req_count; i++){
+		uint32_t read_addr = read_pos * TLM_BLOCK_SIZE + TLM_START_ADDR;
+		int ret = flash_read(flash_dev, read_addr, &syshk_tlm, sizeof(syshk_tlm));
+		if (ret == 0){
+			send_syshk_to_ground_impl(&syshk_tlm);
+			k_sleep(K_MSEC(send_intvl_ms));
+		}
+		else{
+			LOG_ERR("Failed to read history syshk data from flash at address 0x%08X: %d",
+					read_addr, ret);
+		}
+
+		read_pos = (read_pos + 1) % MAX_TLM_STORE_NUM;
+	}
 }
 
 static void store_syshk(struct syshk_tlm *syshk_tlm)
@@ -331,7 +391,7 @@ static void handle_syshk(struct k_work *work)
 	store_syshk(&syshk);
 
 	if (IS_ENABLED(CONFIG_SCSAT1_MAIN_AUTO_SYSHK_DOWNLINK)) {
-		send_syshk_to_ground();
+		send_syshk_to_ground_impl(&syshk);
 	}
 
 	if(sc_fram_update_tlm_seq_num() < 0){
