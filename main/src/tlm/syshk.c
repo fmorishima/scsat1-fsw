@@ -3,10 +3,15 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/flash.h>
+
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/zbus/zbus.h>
 #include <csp/drivers/can_zephyr.h>
 #include <csp/csp.h>
+#include "data_nor.h"
 #include "sc_csp.h"
 #include "syshk.h"
 #include "system.h"
@@ -257,6 +262,52 @@ close:
 end:
 }
 
+static void store_syshk(struct syshk_tlm *syshk_tlm)
+{
+	const struct device* flash_dev = stored_tlm_flash_dev();
+	int ret;
+	uint32_t write_pos;
+	uint32_t write_addr;
+
+	if (!device_is_ready(flash_dev)) {
+		LOG_ERR("Flash device %s is not ready", flash_dev->name);
+		return;
+	}
+
+	write_pos = syshk_tlm->seq_num % MAX_TLM_STORE_NUM;
+	write_addr = write_pos * TLM_BLOCK_SIZE + TLM_START_ADDR;
+
+	if(write_addr % ERASE_SECTOR_SIZE == 0){
+		LOG_INF("reached to erase unit address 0x%08X, seq_num: %d\n",
+			write_addr, syshk_tlm->seq_num);
+		ret = flash_erase(flash_dev, write_addr, ERASE_SECTOR_SIZE);
+		if(ret != 0){
+			LOG_ERR("Failed to erase flash sector at address 0x%08X: %d",
+				write_addr, ret);
+			return;
+		}
+	}
+
+	if(!is_flash_erased(flash_dev, write_addr, TLM_BLOCK_SIZE)){
+		uint32_t sector_addr = write_addr & ~(ERASE_SECTOR_SIZE - 1);
+		LOG_INF("block is not erased, force erase at address 0x%08X, seq_num: %d\n",
+				sector_addr, syshk_tlm->seq_num);
+		ret = flash_erase(flash_dev, sector_addr, ERASE_SECTOR_SIZE);
+		if(ret != 0){
+			LOG_ERR("Failed to erase flash sector at address 0x%08X: %d",
+				sector_addr, ret);
+			return;
+		}
+	}
+
+	ret = flash_write(flash_dev, write_addr, syshk_tlm, sizeof(*syshk_tlm));
+	if(ret != 0){
+		LOG_ERR("Failed to write syshk_tlm to flash at address 0x%08X: %d",
+                write_addr, ret);
+		return;
+	}
+}
+
 static void handle_syshk(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -276,6 +327,8 @@ static void handle_syshk(struct k_work *work)
 	}
 
 	syshk.seq_num++;
+
+	store_syshk(&syshk);
 
 	if (IS_ENABLED(CONFIG_SCSAT1_MAIN_AUTO_SYSHK_DOWNLINK)) {
 		send_syshk_to_ground();
