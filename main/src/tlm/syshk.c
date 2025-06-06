@@ -390,7 +390,8 @@ static void handle_syshk(struct k_work *work)
 
 	store_syshk(&syshk);
 
-	if (IS_ENABLED(CONFIG_SCSAT1_MAIN_AUTO_SYSHK_DOWNLINK)) {
+	if (IS_ENABLED(CONFIG_SCSAT1_MAIN_AUTO_SYSHK_DOWNLINK) &&
+        (k_uptime_get_32() / MSEC_PER_SEC) > CONFIG_SCSAT1_MAIN_SYSHK_INHIBIT_PERIOD_SEC){
 		send_syshk_to_ground_impl(&syshk);
 	}
 
@@ -415,6 +416,6 @@ void start_send_syshk(void)
 			   CONFIG_SCSAT1_MAIN_SEND_SYSHK_THREAD_PRIORITY, NULL);
 	k_thread_name_set(&syshk_workq.thread, "syshk_workq");
 
-	k_timer_start(&syshk_timer, K_SECONDS(CONFIG_SCSAT1_MAIN_SYSHK_INHIBIT_PERIOD_SEC),
+	k_timer_start(&syshk_timer, K_SECONDS(CONFIG_SCSAT1_MAIN_SYSHK_INTERVAL_SEC),
 		      K_SECONDS(CONFIG_SCSAT1_MAIN_SYSHK_INTERVAL_SEC));
 }
