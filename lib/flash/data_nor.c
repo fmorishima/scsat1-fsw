@@ -8,6 +8,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/flash.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/fs/littlefs.h>
 #include <zephyr/storage/flash_map.h>
@@ -142,4 +143,40 @@ unlock:
 
 end:
 	return ret;
+}
+
+#define FLASH_CHUNK_SIZE 256
+
+bool is_flash_erased(const struct device *flash_dev, uint32_t addr, size_t len)
+{
+	int ret;
+	uint8_t buf[FLASH_CHUNK_SIZE] __aligned(4);
+
+	while (len > 0) {
+		uint32_t chunk_len = (len < FLASH_CHUNK_SIZE) ? len : FLASH_CHUNK_SIZE;
+		ret = flash_read(flash_dev, addr, buf, chunk_len);
+		if (ret != 0) return false;
+
+		uint32_t *p32 = (uint32_t *)buf;
+		size_t words = chunk_len / 4;
+
+		for (size_t i = 0; i < words; i++) {
+			if (p32[i] != 0xFFFFFFFF) {
+				return false;
+			}
+		}
+
+		for (size_t i = words * 4; i < chunk_len; i++) {
+			if (buf[i] != 0xFF) return false;
+		}
+
+		addr += chunk_len;
+		len -= chunk_len;
+	}
+	return true;
+}
+
+const struct device* stored_tlm_flash_dev()
+{
+	return DEVICE_DT_GET(DT_NODELABEL(s25fl256l1));
 }
